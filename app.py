@@ -1670,20 +1670,4 @@ def main():
 if __name__ == "__main__":
     main()
 
-st.markdown("---")
-st.subheader("🎉 Ready to get started?")
 
-col1, col2 = st.columns([2, 1])
-
-with col1:
-    st.success("**Limited Launch Offer: 20% OFF**")
-    st.markdown("""
-    Use code **LAUNCH20** at checkout
-    
-    ✅ First 10 buyers only
-    ✅ Valid for 7 days
-    """)
-
-with col2:
-    st.link_button("🚀 Get ProData AI", 
-                   "https://varunanalyze.gumroad.com/l/dgluuk/64hr5to")
