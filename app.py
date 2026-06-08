@@ -30,7 +30,6 @@ from sklearn.metrics import (r2_score, mean_absolute_error, mean_squared_error,
                               confusion_matrix)
 from fpdf import FPDF
 import anthropic
-import streamlit.components.v1 as components
 import streamlit_analytics2 as streamlit_analytics
 
 # ── Page config ───────────────────────────────────────────────────────────────
