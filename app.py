@@ -30,7 +30,7 @@ from sklearn.metrics import (r2_score, mean_absolute_error, mean_squared_error,
                               confusion_matrix)
 from fpdf import FPDF
 import anthropic
-from streamlit.components.v1 import html
+from streamlit_gtag import st_gtag
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -40,15 +40,16 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 # ── Google Analytics ──────────────────────────────────────────────────────────
-html("""
-<script async src="https://www.googletagmanager.com/gtag/js?id=G-EJNVK39F02"></script>
-<script>
-window.dataLayer = window.dataLayer || [];
-function gtag(){dataLayer.push(arguments);}
-gtag('js', new Date());
-gtag('config', 'G-EJNVK39F02');
-</script>
-""", height=0)
+st_gtag(
+    key="prodata-analytics",
+    id="G-EJNVK39F02",
+    event_name="app_loaded",
+    params={
+        "event_category": "engagement",
+        "event_label": "ProData AI",
+        "value": 1,
+    },
+)
 
 
 st.markdown("""
