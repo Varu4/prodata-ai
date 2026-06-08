@@ -10,3 +10,4 @@ fpdf2>=2.7.0
 anthropic>=0.25.0
 openpyxl>=3.1.0
 kaleido>=0.2.1
+streamlit-analytics2
