@@ -30,6 +30,13 @@ from sklearn.metrics import (r2_score, mean_absolute_error, mean_squared_error,
                               confusion_matrix)
 from fpdf import FPDF
 import anthropic
+from streamlit_analytics2 import StreamlitAnalytics
+
+analytics = StreamlitAnalytics(
+    tracking_id="G-EJNVK39F02"
+)
+
+analytics.start_tracking()
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -1668,6 +1675,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
-
+    try:
+        main()
+    finally:
+        analytics.stop_tracking()
 
