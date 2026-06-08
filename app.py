@@ -30,7 +30,7 @@ from sklearn.metrics import (r2_score, mean_absolute_error, mean_squared_error,
                               confusion_matrix)
 from fpdf import FPDF
 import anthropic
-
+from streamlit.components.v1 import html
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -39,6 +39,17 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+# ── Google Analytics ──────────────────────────────────────────────────────────
+html("""
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-EJNVK39F02"></script>
+<script>
+window.dataLayer = window.dataLayer || [];
+function gtag(){dataLayer.push(arguments);}
+gtag('js', new Date());
+gtag('config', 'G-EJNVK39F02');
+</script>
+""", height=0)
+
 
 st.markdown("""
 <style>
