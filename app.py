@@ -644,14 +644,23 @@ init()
 ID_KW = ['id', 'index', 'serial', 'customerid', 'orderid']
 
 
+# ── API Key resolver ──────────────────────────────────────────────────────────
+def get_api_key(user_key: str) -> str:
+    """
+    Demo mode  → use server-side key from st.secrets / env var (never shown to user).
+    Own data   → use whatever the user typed in.
+    Falls back gracefully if secret not configured.
+    """
+    is_demo = st.session_state.get('fname') == 'titanic.csv'
+    if is_demo:
+        return st.secrets.get("ANTHROPIC_API_KEY", user_key)
+    return user_key
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # AUTOML ENGINE — trains 6 models, ranks them, picks the best automatically
 # ══════════════════════════════════════════════════════════════════════════════
 def run_automl(df, target, feats, split=0.2, auto_target=False):
-    """
-    Trains 6 models on the data, ranks them by key metric,
-    returns dict with winner stats, leaderboard, and charts.
-    """
     X = pd.get_dummies(df[feats], drop_first=True).fillna(0)
     y = df[target].fillna(df[target].median())
     is_class = (y.nunique() < 15) and (y.nunique() > 1)
@@ -707,7 +716,6 @@ def run_automl(df, target, feats, split=0.2, auto_target=False):
     winner_model, winner_preds = trained_models[winner_name]
     winner_row = leaderboard[0]
 
-    # Build leaderboard chart
     lb_df = pd.DataFrame(leaderboard)
     metric_col = "Accuracy" if is_class else "R²"
     lb_df_plot = lb_df[lb_df[metric_col] != "-"].copy()
@@ -730,7 +738,6 @@ def run_automl(df, target, feats, split=0.2, auto_target=False):
         yaxis=dict(categoryorder='total ascending', tickfont=dict(color='#94a3b8')),
     )
 
-    # Feature importance from winner
     fig_imp = None
     importances = {}
     if hasattr(winner_model, 'feature_importances_'):
@@ -742,7 +749,6 @@ def run_automl(df, target, feats, split=0.2, auto_target=False):
         fig_imp.update_layout(yaxis={'categoryorder': 'total ascending'}, showlegend=False)
         dark_fig(fig_imp, 320)
 
-    # Actual vs predicted (regression only)
     fig_sc = None
     if not is_class:
         fig_sc = px.scatter(
@@ -775,7 +781,6 @@ def run_automl(df, target, feats, split=0.2, auto_target=False):
 
 
 def render_automl_tab(df, results, audit, mode_key):
-    """Shared AutoML tab UI for both manual and results views."""
     st.markdown("""
     <div style='background:rgba(0,212,170,0.05);border:1px solid rgba(0,212,170,0.2);
     border-left:3px solid #00d4aa;border-radius:0 12px 12px 12px;padding:1rem 1.25rem;margin-bottom:1.25rem;'>
@@ -797,7 +802,6 @@ def render_automl_tab(df, results, audit, mode_key):
         split_pct = st.slider("Test split %", 10, 40, 20, 5, key=f"aml_split_{mode_key}")
 
     if st.button("🚀 Run AutoML — Compare All Models", type="primary", key=f"aml_run_{mode_key}"):
-        # auto-select all numeric features if none chosen
         use_feats = feats if feats else [c for c in num_cols if c != target and
                                           not any(k in c.lower() for k in ID_KW)]
         if not use_feats:
@@ -815,19 +819,16 @@ def render_automl_tab(df, results, audit, mode_key):
                 except Exception as e:
                     st.error(f"AutoML error: {e}")
 
-    # Show results if available
     ml = results.get('ml')
     if ml and ml.get('leaderboard'):
         _render_automl_results(ml)
 
 
 def _render_automl_results(ml):
-    """Render AutoML results: winner banner, leaderboard, charts."""
     metric_label = "Accuracy" if ml['is_class'] else "R²"
     metric_val = f"{ml['acc']:.2%}" if ml['is_class'] else f"{ml['r2']:.4f}"
     n = ml.get('n_models', 6)
 
-    # Winner banner
     st.markdown(f"""
     <div style='background:linear-gradient(135deg,rgba(0,212,170,0.1),rgba(99,102,241,0.08));
     border:1px solid rgba(0,212,170,0.3);border-radius:14px;padding:1.25rem 1.5rem;margin:0.75rem 0 1.25rem;
@@ -838,7 +839,7 @@ def _render_automl_results(ml):
                 Best Model: {ml['model_name']}
             </div>
             <div style='color:#64748b;font-size:0.8rem;'>
-                Tested {n} models automatically · {metric_label}: 
+                Tested {n} models automatically · {metric_label}:
                 <span style='color:#00d4aa;font-weight:600;'>{metric_val}</span>
                 · Target: <code style='color:#a5b4fc;'>{ml['target']}</code>
             </div>
@@ -846,7 +847,6 @@ def _render_automl_results(ml):
     </div>
     """, unsafe_allow_html=True)
 
-    # Key metrics
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Winner", ml['model_name'].split()[0])
     m2.metric(metric_label, metric_val)
@@ -859,14 +859,13 @@ def _render_automl_results(ml):
 
     st.divider()
 
-    # Leaderboard table + chart side by side
     c1, c2 = st.columns([1, 1.4])
     with c1:
         st.markdown("**Model leaderboard**")
         lb = ml['leaderboard']
         rows = []
         for i, r in enumerate(lb):
-            medal = ["🥇", "🥈", "🥉"] [i] if i < 3 else f"#{i+1}"
+            medal = ["🥇", "🥈", "🥉"][i] if i < 3 else f"#{i+1}"
             name = r['Model']
             status = r.get('Status', '✗')
             if ml['is_class']:
@@ -882,7 +881,6 @@ def _render_automl_results(ml):
         if ml.get('fig_lb'):
             st.plotly_chart(ml['fig_lb'], use_container_width=True)
 
-    # Feature importance + scatter
     if ml.get('fig_imp') or ml.get('fig_sc'):
         c1, c2 = st.columns(2)
         with c1:
@@ -981,7 +979,9 @@ def run_oneclick(df, api_key, agent, client_name, project):
                 fig_fc.add_trace(go.Scatter(x=forecast['ds'], y=forecast['yhat_upper'], mode='lines', line=dict(width=0), showlegend=False))
                 fig_fc.add_trace(go.Scatter(x=forecast['ds'], y=forecast['yhat_lower'], mode='lines',
                                             fill='tonexty', fillcolor='rgba(99,102,241,0.1)', line=dict(width=0), name='95% CI'))
-                fig_fc.update_layout(hovermode='x unified'); dark_fig(fig_fc, 340); fig_fc.update_layout(title=dict(text=f'30-Day Forecast — {usable_num[0]}', font=dict(color='#e2e8f0', size=13)))
+                fig_fc.update_layout(hovermode='x unified')
+                dark_fig(fig_fc, 340)
+                fig_fc.update_layout(title=dict(text=f'30-Day Forecast — {usable_num[0]}', font=dict(color='#e2e8f0', size=13)))
                 results['forecast'] = {'col': usable_num[0], 'horizon': 30,
                                        'latest': float(prophet_df['y'].iloc[-1]),
                                        'projected': float(forecast['yhat'].iloc[-1]),
@@ -1008,7 +1008,8 @@ def run_oneclick(df, api_key, agent, client_name, project):
             imp_dr = pd.Series(m_dr.feature_importances_, index=X_dr.columns).sort_values(ascending=False).head(8)
             fig_dr = px.bar(imp_dr, orientation='h', title=f"What drives {kpi}?",
                             color_discrete_sequence=['#6366f1'])
-            fig_dr.update_layout(yaxis={'categoryorder': 'total ascending'}, showlegend=False); dark_fig(fig_dr, 320); dark_fig(fig_dr, 300)
+            fig_dr.update_layout(yaxis={'categoryorder': 'total ascending'}, showlegend=False)
+            dark_fig(fig_dr, 300)
             results['drivers'] = {'kpi': kpi, 'top': imp_dr.index[0], 'top5': imp_dr.head(5).to_dict(), 'fig': fig_dr}
             save_fig(fig_dr, f"Business Drivers — {kpi}")
             audit.append(f"Top driver for '{kpi}': '{imp_dr.index[0]}'")
@@ -1016,9 +1017,10 @@ def run_oneclick(df, api_key, agent, client_name, project):
             results['driver_error'] = str(e)
     prog.progress(72)
 
-    # 5 — AI
+    # 5 — AI (uses resolved key — server key for demo, user key for own data)
     status.markdown('<div class="badge-running">Step 5/5 — AI insights...</div>', unsafe_allow_html=True)
-    if api_key:
+    resolved_key = get_api_key(api_key)
+    if resolved_key:
         try:
             ctx = build_ctx(df_clean, results)
             summary = []
@@ -1032,13 +1034,13 @@ def run_oneclick(df, api_key, agent, client_name, project):
                 summary.append(f"Forecast: {fc['col']} {fc['latest']:.1f} -> {fc['projected']:.1f}")
             prompt = (f"Results:\n{chr(10).join(summary)}\n\nContext:\n{ctx}\n\n"
                       "Give 5 specific actionable business insights with numbers. Then 3 concrete recommendations.")
-            ai_insights = call_claude(prompt, [], "Expert business data analyst. Specific, numbers-driven, actionable.", api_key)
+            ai_insights = call_claude(prompt, [], "Expert business data analyst. Specific, numbers-driven, actionable.", resolved_key)
             results['ai_insights'] = ai_insights
             audit.append("AI insights generated")
         except Exception as e:
             results['ai_insights'] = f"AI unavailable: {e}"
     else:
-        results['ai_insights'] = "Add API key in sidebar for AI insights."
+        results['ai_insights'] = "Add your Anthropic API key in the sidebar to enable AI insights on your data."
     prog.progress(88, text="Generating PDF...")
 
     # PDF
@@ -1059,7 +1061,7 @@ def run_oneclick(df, api_key, agent, client_name, project):
     st.session_state['chat_msgs'] = []
     st.session_state['chat_hist'] = []
 
-    if results.get('ai_insights') and api_key and not results['ai_insights'].startswith("Add"):
+    if results.get('ai_insights') and resolved_key and not results['ai_insights'].startswith("Add"):
         st.session_state['chat_msgs'] = [{"role": "assistant",
                                           "content": f"**Analysis complete:**\n\n{results['ai_insights']}"}]
         st.session_state['chat_hist'] = [{"role": "assistant", "content": results['ai_insights']}]
@@ -1069,7 +1071,8 @@ def run_oneclick(df, api_key, agent, client_name, project):
 # SHARED CHAT WIDGET
 # ══════════════════════════════════════════════════════════════════════════════
 def render_chat(df, results, api_key):
-    if not api_key:
+    resolved_key = get_api_key(api_key)
+    if not resolved_key:
         st.warning("Add your Anthropic API key in the sidebar to enable AI Chat.")
         return
 
@@ -1098,7 +1101,7 @@ def render_chat(df, results, api_key):
                       "Be specific, reference numbers and column names. Concise and actionable.")
             with st.spinner("Analyzing..."):
                 try:
-                    ans = call_claude(question, st.session_state['chat_hist'][:-1], system, api_key)
+                    ans = call_claude(question, st.session_state['chat_hist'][:-1], system, resolved_key)
                 except Exception as e:
                     ans = f"Error: {e}"
             st.session_state['chat_msgs'].append({"role": "assistant", "content": ans})
@@ -1138,7 +1141,6 @@ def render_oneclick_dashboard(df, api_key, agent, client_name, project):
     num_cols, _ = get_types(df)
     audit = st.session_state['oc_audit']
 
-    # Status strip
     steps = [("Cleaned", bool(results.get('clean'))), ("ML", bool(results.get('ml'))),
              ("Forecast", bool(results.get('forecast'))), ("Drivers", bool(results.get('drivers'))),
              ("AI insights", bool(results.get('ai_insights'))), ("PDF", bool(results.get('pdf')))]
@@ -1225,7 +1227,9 @@ def render_oneclick_dashboard(df, api_key, agent, client_name, project):
             st.dataframe(df.describe().round(2), use_container_width=True)
         with sub[2]:
             if len(num_cols) > 1:
-                fig_corr = px.imshow(df[num_cols].corr(), text_auto=True, color_continuous_scale='RdBu_r'); dark_fig(fig_corr, 400); fig_corr.update_layout(title=dict(text='Correlation Heatmap', font=dict(color='#e2e8f0', size=13)))
+                fig_corr = px.imshow(df[num_cols].corr(), text_auto=True, color_continuous_scale='RdBu_r')
+                dark_fig(fig_corr, 400)
+                fig_corr.update_layout(title=dict(text='Correlation Heatmap', font=dict(color='#e2e8f0', size=13)))
                 st.plotly_chart(fig_corr, use_container_width=True)
 
     with tabs[6]:
@@ -1254,7 +1258,6 @@ def render_manual_dashboard(df, api_key, agent, client_name, project):
     tabs = st.tabs(["Data Overview", "Visuals", "Data Cleaning", "Preparation",
                     "ML Models", "Forecasting", "Business Drivers", "AI Chat", "PDF Report"])
 
-    # Data Overview
     with tabs[0]:
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Rows", f"{df.shape[0]:,}")
@@ -1284,7 +1287,6 @@ def render_manual_dashboard(df, api_key, agent, client_name, project):
             st.plotly_chart(fig_corr, use_container_width=True)
             save_fig(fig_corr, "Correlation Heatmap")
 
-    # Visuals
     with tabs[1]:
         st.subheader("Visual Explorer")
         viz_type = st.radio("Chart type", ["Histogram", "Boxplot", "Scatter", "Bar", "Line"], horizontal=True)
@@ -1326,7 +1328,6 @@ def render_manual_dashboard(df, api_key, agent, client_name, project):
             except Exception as e:
                 st.error(f"Chart error: {e}")
 
-    # Cleaning
     with tabs[2]:
         st.subheader("Data Cleaning")
         c1, c2 = st.columns(2)
@@ -1378,7 +1379,6 @@ def render_manual_dashboard(df, api_key, agent, client_name, project):
         else:
             st.success("No outliers detected.")
 
-    # Preparation
     with tabs[3]:
         st.subheader("Feature Scaling")
         to_scale = st.multiselect("Columns to scale", num_cols)
@@ -1391,13 +1391,9 @@ def render_manual_dashboard(df, api_key, agent, client_name, project):
             st.success(f"Scaled {len(to_scale)} columns.")
             st.rerun()
 
-
-
-    # AutoML Models
     with tabs[4]:
         render_automl_tab(df, results, audit, "manual")
 
-    # Forecasting
     with tabs[5]:
         st.subheader("Enterprise Forecasting (Prophet)")
         date_candidates = [c for c in df.columns if pd.api.types.is_datetime64_any_dtype(df[c])]
@@ -1432,7 +1428,9 @@ def render_manual_dashboard(df, api_key, agent, client_name, project):
                     fig_fc.add_trace(go.Scatter(x=forecast['ds'], y=forecast['yhat_lower'], mode='lines',
                                                 fill='tonexty', fillcolor='rgba(99,102,241,0.1)',
                                                 line=dict(width=0), name='95% CI'))
-                    fig_fc.update_layout(hovermode='x unified'); dark_fig(fig_fc, 340); fig_fc.update_layout(title=dict(text=f'{horizon}-Day Forecast — {val_col}', font=dict(color='#e2e8f0', size=13)))
+                    fig_fc.update_layout(hovermode='x unified')
+                    dark_fig(fig_fc, 340)
+                    fig_fc.update_layout(title=dict(text=f'{horizon}-Day Forecast — {val_col}', font=dict(color='#e2e8f0', size=13)))
                     st.plotly_chart(fig_fc, use_container_width=True)
                     save_fig(fig_fc, f"{horizon}-Day Forecast — {val_col}")
                     if mape:
@@ -1449,7 +1447,6 @@ def render_manual_dashboard(df, api_key, agent, client_name, project):
                 except Exception as e:
                     st.error(f"Forecast error: {e}")
 
-    # Business Drivers
     with tabs[6]:
         st.subheader("Business Driver Analysis (XAI)")
         kpi = st.selectbox("KPI to analyze", num_cols, key="dr_kpi")
@@ -1463,7 +1460,8 @@ def render_manual_dashboard(df, api_key, agent, client_name, project):
             with c1:
                 fig_dr = px.bar(imp_dr, orientation='h', title=f"Factors driving {kpi}",
                                 color_discrete_sequence=['#6366f1'])
-                fig_dr.update_layout(yaxis={'categoryorder': 'total ascending'}, showlegend=False); dark_fig(fig_dr, 320)
+                fig_dr.update_layout(yaxis={'categoryorder': 'total ascending'}, showlegend=False)
+                dark_fig(fig_dr, 320)
                 st.plotly_chart(fig_dr, use_container_width=True)
                 save_fig(fig_dr, f"Business Drivers — {kpi}")
             with c2:
@@ -1475,11 +1473,9 @@ def render_manual_dashboard(df, api_key, agent, client_name, project):
             audit.append(f"Driver analysis on '{kpi}'")
             st.success("Done! Ask AI Chat to explain what this means for the business.")
 
-    # AI Chat
     with tabs[7]:
         render_chat(df, results, api_key)
 
-    # PDF Report
     with tabs[8]:
         st.subheader("Generate PDF Report")
         st.write("Compiles all manual analysis, charts, ML results, forecasts, and AI chat into a PDF.")
@@ -1536,9 +1532,34 @@ def main():
                 margin-top:12px;'></div>
 </div>
 """, unsafe_allow_html=True)
-        api_key = st.text_input("Anthropic API Key", type="password",
-                                 placeholder="sk-ant-...",
-                                 help="For AI insights & chat. console.anthropic.com")
+
+        # ── API Key: hidden for demo, shown for own data ──────────────────────
+        is_demo = st.session_state.get('fname') == 'titanic.csv'
+        has_own_data = (st.session_state.get('df') is not None and not is_demo)
+
+        if is_demo:
+            # Server key used silently — user sees a trust badge instead
+            api_key = ""  # resolved later via get_api_key()
+            st.markdown("""
+<div style='background:rgba(0,212,170,0.06);border:1px solid rgba(0,212,170,0.2);
+border-radius:9px;padding:0.55rem 0.9rem;font-size:0.78rem;color:#00d4aa;margin-bottom:0.5rem;'>
+🔒 Demo powered by ProData AI
+</div>
+""", unsafe_allow_html=True)
+        elif has_own_data:
+            # Own CSV uploaded — ask for their key
+            api_key = st.text_input(
+                "Anthropic API Key",
+                type="password",
+                placeholder="sk-ant-...",
+                help="Required for AI insights & chat on your own data. console.anthropic.com"
+            )
+            if not api_key:
+                st.caption("No key? [Get one free →](https://console.anthropic.com)")
+        else:
+            # Landing page — no file loaded yet, hide key input
+            api_key = ""
+
         st.divider()
         st.markdown("### Upload Dataset")
         uploaded = st.file_uploader("CSV or Excel", type=['csv', 'xlsx'])
@@ -1646,7 +1667,6 @@ def main():
                      type="primary" if st.session_state['mode'] == 'manual' else "secondary",
                      use_container_width=True):
             st.session_state['mode'] = 'manual'
-            # Reset chat when switching to manual so it uses manual results
             st.session_state['chat_msgs'] = []
             st.session_state['chat_hist'] = []
             st.rerun()
@@ -1656,7 +1676,6 @@ def main():
     st.markdown(f'<div class="{cls}">{mode_label}</div>', unsafe_allow_html=True)
     st.divider()
 
-    # Render the right mode
     if st.session_state['mode'] == 'oneclick':
         if not st.session_state['oc_ran']:
             run_oneclick(df, api_key, agent, client_name, project)
