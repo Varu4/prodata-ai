@@ -30,7 +30,8 @@ from sklearn.metrics import (r2_score, mean_absolute_error, mean_squared_error,
                               confusion_matrix)
 from fpdf import FPDF
 import anthropic
-import streamlit_analytics2 as streamlit_analytics
+from powerbi_export import build_powerbi_excel
+from dashboard import render_dashboard
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -39,8 +40,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
-# ── Google Analytics ──────────────────────────────────────────────────────────
-streamlit_analytics.start_tracking()
 
 st.markdown("""
 <style>
@@ -661,6 +660,10 @@ def get_api_key(user_key: str) -> str:
 # AUTOML ENGINE — trains 6 models, ranks them, picks the best automatically
 # ══════════════════════════════════════════════════════════════════════════════
 def run_automl(df, target, feats, split=0.2, auto_target=False):
+    """
+    Trains 6 models on the data, ranks them by key metric,
+    returns dict with winner stats, leaderboard, and charts.
+    """
     X = pd.get_dummies(df[feats], drop_first=True).fillna(0)
     y = df[target].fillna(df[target].median())
     is_class = (y.nunique() < 15) and (y.nunique() > 1)
@@ -716,6 +719,7 @@ def run_automl(df, target, feats, split=0.2, auto_target=False):
     winner_model, winner_preds = trained_models[winner_name]
     winner_row = leaderboard[0]
 
+    # Build leaderboard chart
     lb_df = pd.DataFrame(leaderboard)
     metric_col = "Accuracy" if is_class else "R²"
     lb_df_plot = lb_df[lb_df[metric_col] != "-"].copy()
@@ -738,6 +742,7 @@ def run_automl(df, target, feats, split=0.2, auto_target=False):
         yaxis=dict(categoryorder='total ascending', tickfont=dict(color='#94a3b8')),
     )
 
+    # Feature importance from winner
     fig_imp = None
     importances = {}
     if hasattr(winner_model, 'feature_importances_'):
@@ -749,6 +754,7 @@ def run_automl(df, target, feats, split=0.2, auto_target=False):
         fig_imp.update_layout(yaxis={'categoryorder': 'total ascending'}, showlegend=False)
         dark_fig(fig_imp, 320)
 
+    # Actual vs predicted (regression only)
     fig_sc = None
     if not is_class:
         fig_sc = px.scatter(
@@ -781,6 +787,7 @@ def run_automl(df, target, feats, split=0.2, auto_target=False):
 
 
 def render_automl_tab(df, results, audit, mode_key):
+    """Shared AutoML tab UI for both manual and results views."""
     st.markdown("""
     <div style='background:rgba(0,212,170,0.05);border:1px solid rgba(0,212,170,0.2);
     border-left:3px solid #00d4aa;border-radius:0 12px 12px 12px;padding:1rem 1.25rem;margin-bottom:1.25rem;'>
@@ -802,6 +809,7 @@ def render_automl_tab(df, results, audit, mode_key):
         split_pct = st.slider("Test split %", 10, 40, 20, 5, key=f"aml_split_{mode_key}")
 
     if st.button("🚀 Run AutoML — Compare All Models", type="primary", key=f"aml_run_{mode_key}"):
+        # auto-select all numeric features if none chosen
         use_feats = feats if feats else [c for c in num_cols if c != target and
                                           not any(k in c.lower() for k in ID_KW)]
         if not use_feats:
@@ -819,16 +827,19 @@ def render_automl_tab(df, results, audit, mode_key):
                 except Exception as e:
                     st.error(f"AutoML error: {e}")
 
+    # Show results if available
     ml = results.get('ml')
     if ml and ml.get('leaderboard'):
         _render_automl_results(ml)
 
 
 def _render_automl_results(ml):
+    """Render AutoML results: winner banner, leaderboard, charts."""
     metric_label = "Accuracy" if ml['is_class'] else "R²"
     metric_val = f"{ml['acc']:.2%}" if ml['is_class'] else f"{ml['r2']:.4f}"
     n = ml.get('n_models', 6)
 
+    # Winner banner
     st.markdown(f"""
     <div style='background:linear-gradient(135deg,rgba(0,212,170,0.1),rgba(99,102,241,0.08));
     border:1px solid rgba(0,212,170,0.3);border-radius:14px;padding:1.25rem 1.5rem;margin:0.75rem 0 1.25rem;
@@ -839,7 +850,7 @@ def _render_automl_results(ml):
                 Best Model: {ml['model_name']}
             </div>
             <div style='color:#64748b;font-size:0.8rem;'>
-                Tested {n} models automatically · {metric_label}:
+                Tested {n} models automatically · {metric_label}: 
                 <span style='color:#00d4aa;font-weight:600;'>{metric_val}</span>
                 · Target: <code style='color:#a5b4fc;'>{ml['target']}</code>
             </div>
@@ -847,6 +858,7 @@ def _render_automl_results(ml):
     </div>
     """, unsafe_allow_html=True)
 
+    # Key metrics
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Winner", ml['model_name'].split()[0])
     m2.metric(metric_label, metric_val)
@@ -859,13 +871,14 @@ def _render_automl_results(ml):
 
     st.divider()
 
+    # Leaderboard table + chart side by side
     c1, c2 = st.columns([1, 1.4])
     with c1:
         st.markdown("**Model leaderboard**")
         lb = ml['leaderboard']
         rows = []
         for i, r in enumerate(lb):
-            medal = ["🥇", "🥈", "🥉"][i] if i < 3 else f"#{i+1}"
+            medal = ["🥇", "🥈", "🥉"] [i] if i < 3 else f"#{i+1}"
             name = r['Model']
             status = r.get('Status', '✗')
             if ml['is_class']:
@@ -879,16 +892,18 @@ def _render_automl_results(ml):
 
     with c2:
         if ml.get('fig_lb'):
-            st.plotly_chart(ml['fig_lb'], use_container_width=True)
+            st.plotly_chart(ml['fig_lb'], use_container_width=True,key=f"leaderboard_{ml['target']}")
 
+    # Feature importance + scatter
     if ml.get('fig_imp') or ml.get('fig_sc'):
         c1, c2 = st.columns(2)
         with c1:
             if ml.get('fig_imp'):
-                st.plotly_chart(ml['fig_imp'], use_container_width=True)
+                st.plotly_chart(ml['fig_imp'], use_container_width=True,key=f"importance_{ml['target']}"
+)
         with c2:
             if ml.get('fig_sc'):
-                st.plotly_chart(ml['fig_sc'], use_container_width=True)
+                st.plotly_chart(ml['fig_sc'], use_container_width=True,key=f"scatter_{ml['target']}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -979,9 +994,7 @@ def run_oneclick(df, api_key, agent, client_name, project):
                 fig_fc.add_trace(go.Scatter(x=forecast['ds'], y=forecast['yhat_upper'], mode='lines', line=dict(width=0), showlegend=False))
                 fig_fc.add_trace(go.Scatter(x=forecast['ds'], y=forecast['yhat_lower'], mode='lines',
                                             fill='tonexty', fillcolor='rgba(99,102,241,0.1)', line=dict(width=0), name='95% CI'))
-                fig_fc.update_layout(hovermode='x unified')
-                dark_fig(fig_fc, 340)
-                fig_fc.update_layout(title=dict(text=f'30-Day Forecast — {usable_num[0]}', font=dict(color='#e2e8f0', size=13)))
+                fig_fc.update_layout(hovermode='x unified'); dark_fig(fig_fc, 340); fig_fc.update_layout(title=dict(text=f'30-Day Forecast — {usable_num[0]}', font=dict(color='#e2e8f0', size=13)))
                 results['forecast'] = {'col': usable_num[0], 'horizon': 30,
                                        'latest': float(prophet_df['y'].iloc[-1]),
                                        'projected': float(forecast['yhat'].iloc[-1]),
@@ -1008,8 +1021,7 @@ def run_oneclick(df, api_key, agent, client_name, project):
             imp_dr = pd.Series(m_dr.feature_importances_, index=X_dr.columns).sort_values(ascending=False).head(8)
             fig_dr = px.bar(imp_dr, orientation='h', title=f"What drives {kpi}?",
                             color_discrete_sequence=['#6366f1'])
-            fig_dr.update_layout(yaxis={'categoryorder': 'total ascending'}, showlegend=False)
-            dark_fig(fig_dr, 300)
+            fig_dr.update_layout(yaxis={'categoryorder': 'total ascending'}, showlegend=False); dark_fig(fig_dr, 320); dark_fig(fig_dr, 300)
             results['drivers'] = {'kpi': kpi, 'top': imp_dr.index[0], 'top5': imp_dr.head(5).to_dict(), 'fig': fig_dr}
             save_fig(fig_dr, f"Business Drivers — {kpi}")
             audit.append(f"Top driver for '{kpi}': '{imp_dr.index[0]}'")
@@ -1017,7 +1029,7 @@ def run_oneclick(df, api_key, agent, client_name, project):
             results['driver_error'] = str(e)
     prog.progress(72)
 
-    # 5 — AI (uses resolved key — server key for demo, user key for own data)
+    # 5 — AI insights (uses resolved key — server key for demo, user key for own data)
     status.markdown('<div class="badge-running">Step 5/5 — AI insights...</div>', unsafe_allow_html=True)
     resolved_key = get_api_key(api_key)
     if resolved_key:
@@ -1141,6 +1153,7 @@ def render_oneclick_dashboard(df, api_key, agent, client_name, project):
     num_cols, _ = get_types(df)
     audit = st.session_state['oc_audit']
 
+    # Status strip
     steps = [("Cleaned", bool(results.get('clean'))), ("ML", bool(results.get('ml'))),
              ("Forecast", bool(results.get('forecast'))), ("Drivers", bool(results.get('drivers'))),
              ("AI insights", bool(results.get('ai_insights'))), ("PDF", bool(results.get('pdf')))]
@@ -1151,7 +1164,7 @@ def render_oneclick_dashboard(df, api_key, agent, client_name, project):
             st.markdown(f'<div class="{cls}">{"✓ " if done else ""}{label}</div>', unsafe_allow_html=True)
     st.divider()
 
-    tabs = st.tabs(["Summary", "ML Model", "Forecast", "Drivers", "AI Chat", "Data", "PDF Report"])
+    tabs = st.tabs(["Summary", "ML Model", "Forecast", "Drivers", "AI Chat", "Data", "PDF Report", "📊 Power BI Export", "🖥️ Dashboard"])
 
     with tabs[0]:
         m1, m2, m3, m4 = st.columns(4)
@@ -1201,7 +1214,7 @@ def render_oneclick_dashboard(df, api_key, agent, client_name, project):
             m2.metric("Projected (30d)", f"{fc['projected']:.2f}")
             if fc.get('mape'):
                 m3.metric("MAPE", f"{fc['mape']*100:.1f}%")
-            st.plotly_chart(fc['fig'], use_container_width=True)
+            st.plotly_chart(fc['fig'], use_container_width=True,key="oneclick_forecast_chart")
 
     with tabs[3]:
         if results.get('driver_error'):
@@ -1210,7 +1223,7 @@ def render_oneclick_dashboard(df, api_key, agent, client_name, project):
             dr = results['drivers']
             c1, c2 = st.columns([2, 1])
             with c1:
-                st.plotly_chart(dr['fig'], use_container_width=True)
+                st.plotly_chart(dr['fig'], use_container_width=True,key="oneclick_drivers_chart")
             with c2:
                 st.markdown(f'<div class="insight-box">🏆 <strong>{dr["top"]}</strong> is the top driver of <strong>{dr["kpi"]}</strong>.</div>', unsafe_allow_html=True)
                 for k, v in dr['top5'].items():
@@ -1227,9 +1240,7 @@ def render_oneclick_dashboard(df, api_key, agent, client_name, project):
             st.dataframe(df.describe().round(2), use_container_width=True)
         with sub[2]:
             if len(num_cols) > 1:
-                fig_corr = px.imshow(df[num_cols].corr(), text_auto=True, color_continuous_scale='RdBu_r')
-                dark_fig(fig_corr, 400)
-                fig_corr.update_layout(title=dict(text='Correlation Heatmap', font=dict(color='#e2e8f0', size=13)))
+                fig_corr = px.imshow(df[num_cols].corr(), text_auto=True, color_continuous_scale='RdBu_r'); dark_fig(fig_corr, 400); fig_corr.update_layout(title=dict(text='Correlation Heatmap', font=dict(color='#e2e8f0', size=13)))
                 st.plotly_chart(fig_corr, use_container_width=True)
 
     with tabs[6]:
@@ -1246,6 +1257,12 @@ def render_oneclick_dashboard(df, api_key, agent, client_name, project):
         else:
             st.info("PDF will appear after analysis.")
 
+    with tabs[7]:
+        _render_powerbi_tab(df, results, client_name, project)
+
+    with tabs[8]:
+        render_dashboard(df, results)
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # MANUAL DASHBOARD
@@ -1256,8 +1273,9 @@ def render_manual_dashboard(df, api_key, agent, client_name, project):
     audit = st.session_state['man_audit']
 
     tabs = st.tabs(["Data Overview", "Visuals", "Data Cleaning", "Preparation",
-                    "ML Models", "Forecasting", "Business Drivers", "AI Chat", "PDF Report"])
+                    "ML Models", "Forecasting", "Business Drivers", "AI Chat", "PDF Report", "📊 Power BI Export", "🖥️ Dashboard"])
 
+    # Data Overview
     with tabs[0]:
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Rows", f"{df.shape[0]:,}")
@@ -1284,9 +1302,10 @@ def render_manual_dashboard(df, api_key, agent, client_name, project):
         if len(num_cols) > 1 and st.button("Generate Correlation Heatmap"):
             fig_corr = px.imshow(df[num_cols].corr(), text_auto=True,
                                   color_continuous_scale='RdBu_r', title="Correlation Heatmap")
-            st.plotly_chart(fig_corr, use_container_width=True)
+            st.plotly_chart(fig_corr, use_container_width=True,key="correlation_heatmap")
             save_fig(fig_corr, "Correlation Heatmap")
 
+    # Visuals
     with tabs[1]:
         st.subheader("Visual Explorer")
         viz_type = st.radio("Chart type", ["Histogram", "Boxplot", "Scatter", "Bar", "Line"], horizontal=True)
@@ -1311,7 +1330,7 @@ def render_manual_dashboard(df, api_key, agent, client_name, project):
                     fig = px.bar(df, x=x_ax, y=y_ax, color=color, title=f"{y_ax} by {x_ax}")
                 elif viz_type == "Line":
                     fig = px.line(df, x=x_ax, y=y_ax, color=color, title=f"{y_ax} over {x_ax}")
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True,key ="pdf_chart")
                 if st.button("Add to PDF"):
                     plt.figure(figsize=(10, 6))
                     if viz_type == "Scatter" and y_ax:
@@ -1328,6 +1347,7 @@ def render_manual_dashboard(df, api_key, agent, client_name, project):
             except Exception as e:
                 st.error(f"Chart error: {e}")
 
+    # Cleaning
     with tabs[2]:
         st.subheader("Data Cleaning")
         c1, c2 = st.columns(2)
@@ -1379,6 +1399,7 @@ def render_manual_dashboard(df, api_key, agent, client_name, project):
         else:
             st.success("No outliers detected.")
 
+    # Preparation
     with tabs[3]:
         st.subheader("Feature Scaling")
         to_scale = st.multiselect("Columns to scale", num_cols)
@@ -1391,9 +1412,13 @@ def render_manual_dashboard(df, api_key, agent, client_name, project):
             st.success(f"Scaled {len(to_scale)} columns.")
             st.rerun()
 
+
+
+    # AutoML Models
     with tabs[4]:
         render_automl_tab(df, results, audit, "manual")
 
+    # Forecasting
     with tabs[5]:
         st.subheader("Enterprise Forecasting (Prophet)")
         date_candidates = [c for c in df.columns if pd.api.types.is_datetime64_any_dtype(df[c])]
@@ -1428,10 +1453,8 @@ def render_manual_dashboard(df, api_key, agent, client_name, project):
                     fig_fc.add_trace(go.Scatter(x=forecast['ds'], y=forecast['yhat_lower'], mode='lines',
                                                 fill='tonexty', fillcolor='rgba(99,102,241,0.1)',
                                                 line=dict(width=0), name='95% CI'))
-                    fig_fc.update_layout(hovermode='x unified')
-                    dark_fig(fig_fc, 340)
-                    fig_fc.update_layout(title=dict(text=f'{horizon}-Day Forecast — {val_col}', font=dict(color='#e2e8f0', size=13)))
-                    st.plotly_chart(fig_fc, use_container_width=True)
+                    fig_fc.update_layout(hovermode='x unified'); dark_fig(fig_fc, 340); fig_fc.update_layout(title=dict(text=f'{horizon}-Day Forecast — {val_col}', font=dict(color='#e2e8f0', size=13)))
+                    st.plotly_chart(fig_fc, use_container_width=True, key="forecast_chart_summary")
                     save_fig(fig_fc, f"{horizon}-Day Forecast — {val_col}")
                     if mape:
                         fm1, fm2 = st.columns(2)
@@ -1447,6 +1470,7 @@ def render_manual_dashboard(df, api_key, agent, client_name, project):
                 except Exception as e:
                     st.error(f"Forecast error: {e}")
 
+    # Business Drivers
     with tabs[6]:
         st.subheader("Business Driver Analysis (XAI)")
         kpi = st.selectbox("KPI to analyze", num_cols, key="dr_kpi")
@@ -1460,9 +1484,8 @@ def render_manual_dashboard(df, api_key, agent, client_name, project):
             with c1:
                 fig_dr = px.bar(imp_dr, orientation='h', title=f"Factors driving {kpi}",
                                 color_discrete_sequence=['#6366f1'])
-                fig_dr.update_layout(yaxis={'categoryorder': 'total ascending'}, showlegend=False)
-                dark_fig(fig_dr, 320)
-                st.plotly_chart(fig_dr, use_container_width=True)
+                fig_dr.update_layout(yaxis={'categoryorder': 'total ascending'}, showlegend=False); dark_fig(fig_dr, 320)
+                st.plotly_chart(fig_dr, use_container_width=True,key="drivers_chart_summary")
                 save_fig(fig_dr, f"Business Drivers — {kpi}")
             with c2:
                 st.markdown(f'<div class="insight-box">🏆 <strong>{imp_dr.index[0]}</strong> is the top driver of <strong>{kpi}</strong>.</div>', unsafe_allow_html=True)
@@ -1473,9 +1496,11 @@ def render_manual_dashboard(df, api_key, agent, client_name, project):
             audit.append(f"Driver analysis on '{kpi}'")
             st.success("Done! Ask AI Chat to explain what this means for the business.")
 
+    # AI Chat
     with tabs[7]:
         render_chat(df, results, api_key)
 
+    # PDF Report
     with tabs[8]:
         st.subheader("Generate PDF Report")
         st.write("Compiles all manual analysis, charts, ML results, forecasts, and AI chat into a PDF.")
@@ -1498,6 +1523,109 @@ def render_manual_dashboard(df, api_key, agent, client_name, project):
         st.markdown("**Audit log**")
         for line in audit:
             st.markdown(f"✓ {line}")
+
+    # Power BI Export
+    with tabs[9]:
+        _render_powerbi_tab(df, results, client_name, project)
+
+    # Dashboard
+    with tabs[10]:
+        render_dashboard(df, results)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# POWER BI EXPORT TAB
+# ══════════════════════════════════════════════════════════════════════════════
+def _render_powerbi_tab(df, results, client_name, project):
+    st.markdown("""
+    <div style='background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.3);
+    border-left:3px solid #6366f1;border-radius:0 12px 12px 12px;
+    padding:1rem 1.25rem;margin-bottom:1.25rem;'>
+    <strong style='color:#6366f1;font-size:1rem;'>📊 Power BI Integration Export</strong><br>
+    <span style='color:#64748b;font-size:0.85rem;'>
+    Exports all analysis results into a Power BI-ready Excel workbook with 8 pre-formatted sheets.
+    Open in Power BI Desktop → Get Data → Excel to build your dashboard instantly.
+    </span>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # What's included
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("**What's included in the Excel export:**")
+        sheets = [
+            ("📋 README", "Step-by-step Power BI setup guide"),
+            ("📊 Raw_Data", "Cleaned dataset — all rows and columns"),
+            ("🤖 ML_Results", "AutoML leaderboard with all 6 models"),
+            ("🎯 Feature_Importance", "XAI driver scores for Power BI bar chart"),
+            ("📈 Forecast_Data", "Historical + predicted values for line chart"),
+            ("🔍 Data_Profile", "Column statistics and null analysis"),
+            ("💬 AI_Insights", "Claude AI analysis text"),
+            ("📌 Summary_KPIs", "Key metrics for Power BI card visuals"),
+        ]
+        for icon_name, desc in sheets:
+            st.markdown(f"**{icon_name}** — {desc}")
+
+    with col2:
+        st.markdown("**Recommended Power BI dashboard pages:**")
+        pages = [
+            ("Page 1: Overview", "Cards from Summary_KPIs + Data table"),
+            ("Page 2: ML Results", "Bar chart — Model vs R² Score"),
+            ("Page 3: Key Drivers", "Horizontal bar — Feature vs Importance"),
+            ("Page 4: Forecast", "Line chart — Date vs Actual + Predicted"),
+            ("Page 5: AI Insights", "Text card from AI_Insights sheet"),
+        ]
+        for page, desc in pages:
+            st.markdown(f"**{page}** — {desc}")
+
+    st.divider()
+
+    # Client details
+    c1, c2 = st.columns(2)
+    with c1:
+        export_client = st.text_input("Client name (for the workbook)", value=client_name, key="pbi_client")
+    with c2:
+        export_project = st.text_input("Project name", value=project, key="pbi_project")
+
+    # Generate button
+    if st.button("📊 Generate Power BI Excel Workbook", type="primary", use_container_width=False):
+        with st.spinner("Building Power BI-ready Excel workbook..."):
+            try:
+                excel_bytes = build_powerbi_excel(df, results, export_client, export_project)
+                fname = f"ProData_AI_{export_project.replace(' ','_')}_PowerBI.xlsx"
+                st.download_button(
+                    "⬇ Download Excel Workbook for Power BI",
+                    data=excel_bytes,
+                    file_name=fname,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+                st.success(f"Excel workbook ready — {fname}")
+                st.markdown("""
+                **Next steps in Power BI Desktop:**
+                1. Open Power BI Desktop
+                2. Click **Get Data** → **Excel Workbook**
+                3. Select the downloaded file
+                4. In Navigator — select **all sheets** → click **Load**
+                5. Build visuals using the sheet data
+                6. Start with **Summary_KPIs** for card visuals
+                7. Use **ML_Results** for the model comparison bar chart
+                8. Use **Forecast_Data** for the time series line chart
+                """)
+            except Exception as e:
+                st.error(f"Export error: {e}")
+                st.info("Make sure openpyxl is installed: pip install openpyxl")
+
+    st.divider()
+    st.markdown("""
+    <div style='background:rgba(0,212,170,0.05);border:1px solid rgba(0,212,170,0.2);
+    border-radius:12px;padding:1rem 1.25rem;font-size:0.85rem;color:#64748b;'>
+    💡 <strong style='color:#00d4aa;'>Pro tip for clients:</strong>
+    Run the analysis first in One-Click or Manual mode, then come here to export.
+    The more analysis you run — ML, Forecasting, Drivers, AI Chat — the richer
+    your Power BI workbook will be.
+    </div>
+    """, unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1667,6 +1795,7 @@ border-radius:9px;padding:0.55rem 0.9rem;font-size:0.78rem;color:#00d4aa;margin-
                      type="primary" if st.session_state['mode'] == 'manual' else "secondary",
                      use_container_width=True):
             st.session_state['mode'] = 'manual'
+            # Reset chat when switching to manual so it uses manual results
             st.session_state['chat_msgs'] = []
             st.session_state['chat_hist'] = []
             st.rerun()
@@ -1676,6 +1805,7 @@ border-radius:9px;padding:0.55rem 0.9rem;font-size:0.78rem;color:#00d4aa;margin-
     st.markdown(f'<div class="{cls}">{mode_label}</div>', unsafe_allow_html=True)
     st.divider()
 
+    # Render the right mode
     if st.session_state['mode'] == 'oneclick':
         if not st.session_state['oc_ran']:
             run_oneclick(df, api_key, agent, client_name, project)
@@ -1691,4 +1821,3 @@ border-radius:9px;padding:0.55rem 0.9rem;font-size:0.78rem;color:#00d4aa;margin-
 
 if __name__ == "__main__":
     main()
-streamlit_analytics.stop_tracking()
