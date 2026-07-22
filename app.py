@@ -21,7 +21,8 @@ from prophet import Prophet
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import (StandardScaler, MinMaxScaler, LabelEncoder)
 from sklearn.ensemble import (RandomForestRegressor, RandomForestClassifier,
-                               GradientBoostingRegressor, GradientBoostingClassifier)
+                               GradientBoostingRegressor, GradientBoostingClassifier,
+                               IsolationForest)
 from sklearn.linear_model import LinearRegression, LogisticRegression, Ridge, Lasso
 from sklearn.tree import DecisionTreeRegressor, DecisionTreeClassifier
 from sklearn.neighbors import KNeighborsRegressor, KNeighborsClassifier
@@ -524,6 +525,9 @@ def build_ctx(df, results):
     if results.get('drivers'):
         dr = results['drivers']
         ctx += f"\n\nTop KPI driver for {dr['kpi']}: {dr['top']}"
+    if results.get('anomalies'):
+        an = results['anomalies']
+        ctx += f"\n\nAnomaly detection: {an['n_anomalies']} of {an['n_total']} rows flagged ({an['pct']:.1f}%) using columns {', '.join(an['cols'])}"
     ctx += f"\n\nSample:\n{df.head(30).to_csv(index=False)}"
     return ctx
 
@@ -597,11 +601,20 @@ def build_pdf(results, df, audit, chat_msgs, client_name, project, agent, mode):
         for k, v in dr['top5'].items():
             pdf.body(f"  - {k}: {v:.4f}")
 
-    pdf.section("9. Audit Log")
+    if results.get('anomalies'):
+        an = results['anomalies']
+        pdf.section("9. Anomaly Detection")
+        pdf.body(f"Columns analyzed: {', '.join(an['cols'])}")
+        pdf.body(f"Flagged {an['n_anomalies']} of {an['n_total']} rows ({an['pct']:.1f}%) as anomalous.")
+        if an.get('top_rows') is not None and len(an['top_rows']):
+            pdf.body("Most anomalous rows (by score):")
+            pdf.mono(an['top_rows'].to_string())
+
+    pdf.section("10. Audit Log")
     for line in audit:
         pdf.body(f"- {line}")
 
-    pdf.section("10. Strategic Recommendations")
+    pdf.section("11. Strategic Recommendations")
     for rec in [
         "Focus on the top identified driver for maximum KPI impact.",
         "Review columns with high null counts before high-stakes decisions.",
@@ -907,6 +920,128 @@ def _render_automl_results(ml):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# ANOMALY DETECTION ENGINE — IsolationForest over numeric columns
+# ══════════════════════════════════════════════════════════════════════════════
+def run_anomaly_detection(df, cols, contamination=0.05):
+    """
+    Flags anomalous rows using IsolationForest.
+    Returns dict with flagged dataframe, chart, and summary stats.
+    """
+    X = df[cols].fillna(df[cols].median())
+    model = IsolationForest(contamination=contamination, random_state=42)
+    preds = model.fit_predict(X)                 # -1 = anomaly, 1 = normal
+    scores = model.decision_function(X)          # lower = more anomalous
+
+    df_flagged = df.copy()
+    df_flagged['anomaly'] = preds == -1
+    df_flagged['anomaly_score'] = scores
+
+    n_total = len(df_flagged)
+    n_anom = int(df_flagged['anomaly'].sum())
+    pct = (n_anom / n_total * 100) if n_total else 0.0
+
+    # Chart — scatter of first two chosen columns colored by anomaly flag,
+    # or a score distribution if only one column given
+    fig = None
+    if len(cols) >= 2:
+        fig = px.scatter(
+            df_flagged, x=cols[0], y=cols[1],
+            color=df_flagged['anomaly'].map({True: 'Anomaly', False: 'Normal'}),
+            color_discrete_map={'Anomaly': '#ec4899', 'Normal': '#00d4aa'},
+            title=f"Anomalies — {cols[0]} vs {cols[1]}"
+        )
+    else:
+        fig = px.histogram(
+            df_flagged, x=cols[0],
+            color=df_flagged['anomaly'].map({True: 'Anomaly', False: 'Normal'}),
+            color_discrete_map={'Anomaly': '#ec4899', 'Normal': '#00d4aa'},
+            title=f"Anomaly Distribution — {cols[0]}"
+        )
+    dark_fig(fig, 340)
+
+    top_rows = df_flagged[df_flagged['anomaly']].sort_values('anomaly_score').head(10)
+
+    return {
+        'cols': cols,
+        'contamination': contamination,
+        'n_total': n_total,
+        'n_anomalies': n_anom,
+        'pct': pct,
+        'df_flagged': df_flagged,
+        'top_rows': top_rows,
+        'fig': fig,
+    }
+
+
+def render_anomaly_tab(df, results, audit, mode_key):
+    """Shared Anomaly Detection tab UI for both one-click and manual views."""
+    st.markdown("""
+    <div style='background:rgba(236,72,153,0.06);border:1px solid rgba(236,72,153,0.25);
+    border-left:3px solid #ec4899;border-radius:0 12px 12px 12px;padding:1rem 1.25rem;margin-bottom:1.25rem;'>
+    <strong style='color:#ec4899;'>Anomaly Detection</strong>
+    <span style='color:#94a3b8;font-size:0.85rem;'> — flags rows that don't fit the normal pattern using IsolationForest.</span>
+    </div>
+    """, unsafe_allow_html=True)
+
+    num_cols, _ = get_types(df)
+    usable_cols = [c for c in num_cols if not any(k in c.lower() for k in ID_KW)]
+
+    if not usable_cols:
+        st.warning("No usable numeric columns found for anomaly detection.")
+        return
+
+    c1, c2 = st.columns([2, 1])
+    with c1:
+        sel_cols = st.multiselect(
+            "Columns to analyze (leave blank = use all numeric)",
+            usable_cols, key=f"an_cols_{mode_key}"
+        )
+    with c2:
+        contamination = st.slider(
+            "Sensitivity (expected anomaly %)", 1, 25, 5, 1, key=f"an_cont_{mode_key}"
+        ) / 100
+
+    if st.button("🔍 Run Anomaly Detection", type="primary", key=f"an_run_{mode_key}"):
+        use_cols = sel_cols if sel_cols else usable_cols
+        with st.spinner("Scanning for anomalies..."):
+            try:
+                an_res = run_anomaly_detection(df, use_cols, contamination)
+                results['anomalies'] = an_res
+                if mode_key == "manual":
+                    st.session_state['man_results'] = results
+                audit.append(f"Anomaly detection: {an_res['n_anomalies']}/{an_res['n_total']} rows flagged "
+                             f"({an_res['pct']:.1f}%) on {', '.join(use_cols)}")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Anomaly detection error: {e}")
+
+    an = results.get('anomalies')
+    if an:
+        _render_anomaly_results(an)
+
+
+def _render_anomaly_results(an):
+    """Render anomaly detection results: summary, chart, flagged rows table."""
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Rows scanned", f"{an['n_total']:,}")
+    m2.metric("Anomalies found", an['n_anomalies'])
+    m3.metric("Anomaly rate", f"{an['pct']:.1f}%")
+    m4.metric("Sensitivity", f"{an['contamination']*100:.0f}%")
+
+    st.divider()
+
+    if an.get('fig'):
+        st.plotly_chart(an['fig'], use_container_width=True, key=f"anomaly_chart_{'_'.join(an['cols'])}")
+
+    if an['n_anomalies'] > 0:
+        st.markdown(f'<div class="insight-box">🚩 <strong>{an["n_anomalies"]}</strong> rows flagged as anomalous out of <strong>{an["n_total"]}</strong> total, using columns: <code>{", ".join(an["cols"])}</code></div>', unsafe_allow_html=True)
+        st.markdown("**Most anomalous rows (lowest score = most unusual):**")
+        st.dataframe(an['top_rows'], use_container_width=True)
+    else:
+        st.success("No anomalies detected at the current sensitivity level.")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # ONE-CLICK PIPELINE
 # ══════════════════════════════════════════════════════════════════════════════
 def run_oneclick(df, api_key, agent, client_name, project):
@@ -920,7 +1055,7 @@ def run_oneclick(df, api_key, agent, client_name, project):
     status = st.empty()
 
     # 1 — Clean
-    status.markdown('<div class="badge-running">Step 1/5 — Cleaning data...</div>', unsafe_allow_html=True)
+    status.markdown('<div class="badge-running">Step 1/6 — Cleaning data...</div>', unsafe_allow_html=True)
     df_clean = df.copy()
     cleaned = []
     dupes = df_clean.duplicated().sum()
@@ -945,7 +1080,7 @@ def run_oneclick(df, api_key, agent, client_name, project):
     prog.progress(18)
 
     # 2 — AutoML
-    status.markdown('<div class="badge-running">Step 2/5 — Running AutoML (6 models)...</div>', unsafe_allow_html=True)
+    status.markdown('<div class="badge-running">Step 2/6 — Running AutoML (6 models)...</div>', unsafe_allow_html=True)
     if len(usable_num) >= 2:
         target = usable_num[-1]
         feats = usable_num[:-1]
@@ -961,7 +1096,7 @@ def run_oneclick(df, api_key, agent, client_name, project):
     prog.progress(36)
 
     # 3 — Forecast
-    status.markdown('<div class="badge-running">Step 3/5 — Forecasting...</div>', unsafe_allow_html=True)
+    status.markdown('<div class="badge-running">Step 3/6 — Forecasting...</div>', unsafe_allow_html=True)
     date_cols = [c for c in df_clean.columns if pd.api.types.is_datetime64_any_dtype(df_clean[c])]
     if not date_cols:
         for c in df_clean.columns:
@@ -1010,7 +1145,7 @@ def run_oneclick(df, api_key, agent, client_name, project):
     prog.progress(55)
 
     # 4 — Drivers
-    status.markdown('<div class="badge-running">Step 4/5 — Business drivers...</div>', unsafe_allow_html=True)
+    status.markdown('<div class="badge-running">Step 4/6 — Business drivers...</div>', unsafe_allow_html=True)
     if len(usable_num) >= 2:
         kpi = usable_num[-1]
         try:
@@ -1027,10 +1162,25 @@ def run_oneclick(df, api_key, agent, client_name, project):
             audit.append(f"Top driver for '{kpi}': '{imp_dr.index[0]}'")
         except Exception as e:
             results['driver_error'] = str(e)
+    prog.progress(60)
+
+    # 5 — Anomaly Detection
+    status.markdown('<div class="badge-running">Step 5/6 — Anomaly detection...</div>', unsafe_allow_html=True)
+    if len(usable_num) >= 1:
+        try:
+            an_res = run_anomaly_detection(df_clean, usable_num, contamination=0.05)
+            results['anomalies'] = an_res
+            save_fig(an_res['fig'], "Anomaly Detection")
+            audit.append(f"Anomaly detection: {an_res['n_anomalies']}/{an_res['n_total']} rows flagged "
+                         f"({an_res['pct']:.1f}%)")
+        except Exception as e:
+            results['anomaly_error'] = str(e)
+    else:
+        results['anomaly_error'] = "Need 1+ numeric columns."
     prog.progress(72)
 
-    # 5 — AI insights (uses resolved key — server key for demo, user key for own data)
-    status.markdown('<div class="badge-running">Step 5/5 — AI insights...</div>', unsafe_allow_html=True)
+    # 6 — AI insights (uses resolved key — server key for demo, user key for own data)
+    status.markdown('<div class="badge-running">Step 6/6 — AI insights...</div>', unsafe_allow_html=True)
     resolved_key = get_api_key(api_key)
     if resolved_key:
         try:
@@ -1044,6 +1194,9 @@ def run_oneclick(df, api_key, agent, client_name, project):
             if results.get('forecast'):
                 fc = results['forecast']
                 summary.append(f"Forecast: {fc['col']} {fc['latest']:.1f} -> {fc['projected']:.1f}")
+            if results.get('anomalies'):
+                an = results['anomalies']
+                summary.append(f"Anomalies: {an['n_anomalies']}/{an['n_total']} rows flagged ({an['pct']:.1f}%)")
             prompt = (f"Results:\n{chr(10).join(summary)}\n\nContext:\n{ctx}\n\n"
                       "Give 5 specific actionable business insights with numbers. Then 3 concrete recommendations.")
             ai_insights = call_claude(prompt, [], "Expert business data analyst. Specific, numbers-driven, actionable.", resolved_key)
@@ -1156,6 +1309,7 @@ def render_oneclick_dashboard(df, api_key, agent, client_name, project):
     # Status strip
     steps = [("Cleaned", bool(results.get('clean'))), ("ML", bool(results.get('ml'))),
              ("Forecast", bool(results.get('forecast'))), ("Drivers", bool(results.get('drivers'))),
+             ("Anomalies", bool(results.get('anomalies'))),
              ("AI insights", bool(results.get('ai_insights'))), ("PDF", bool(results.get('pdf')))]
     cols = st.columns(len(steps))
     for col, (label, done) in zip(cols, steps):
@@ -1164,7 +1318,7 @@ def render_oneclick_dashboard(df, api_key, agent, client_name, project):
             st.markdown(f'<div class="{cls}">{"✓ " if done else ""}{label}</div>', unsafe_allow_html=True)
     st.divider()
 
-    tabs = st.tabs(["Summary", "ML Model", "Forecast", "Drivers", "AI Chat", "Data", "PDF Report", "📊 Power BI Export", "🖥️ Dashboard"])
+    tabs = st.tabs(["Summary", "ML Model", "Forecast", "Drivers", "Anomalies", "AI Chat", "Data", "PDF Report", "📊 Power BI Export", "🖥️ Dashboard"])
 
     with tabs[0]:
         m1, m2, m3, m4 = st.columns(4)
@@ -1230,9 +1384,15 @@ def render_oneclick_dashboard(df, api_key, agent, client_name, project):
                     st.markdown(f"• `{k}`: {v:.4f}")
 
     with tabs[4]:
-        render_chat(df, results, api_key)
+        if results.get('anomaly_error'):
+            st.markdown(f'<div class="warn-box">Anomaly detection skipped: {results["anomaly_error"]}</div>', unsafe_allow_html=True)
+        elif results.get('anomalies'):
+            _render_anomaly_results(results['anomalies'])
 
     with tabs[5]:
+        render_chat(df, results, api_key)
+
+    with tabs[6]:
         sub = st.tabs(["Preview", "Statistics", "Correlation"])
         with sub[0]:
             st.dataframe(df.head(20), use_container_width=True)
@@ -1243,7 +1403,7 @@ def render_oneclick_dashboard(df, api_key, agent, client_name, project):
                 fig_corr = px.imshow(df[num_cols].corr(), text_auto=True, color_continuous_scale='RdBu_r'); dark_fig(fig_corr, 400); fig_corr.update_layout(title=dict(text='Correlation Heatmap', font=dict(color='#e2e8f0', size=13)))
                 st.plotly_chart(fig_corr, use_container_width=True)
 
-    with tabs[6]:
+    with tabs[7]:
         if results.get('pdf_error'):
             st.error(f"PDF error: {results['pdf_error']}")
         elif results.get('pdf'):
@@ -1257,10 +1417,10 @@ def render_oneclick_dashboard(df, api_key, agent, client_name, project):
         else:
             st.info("PDF will appear after analysis.")
 
-    with tabs[7]:
+    with tabs[8]:
         _render_powerbi_tab(df, results, client_name, project)
 
-    with tabs[8]:
+    with tabs[9]:
         render_dashboard(df, results)
 
 
@@ -1273,7 +1433,8 @@ def render_manual_dashboard(df, api_key, agent, client_name, project):
     audit = st.session_state['man_audit']
 
     tabs = st.tabs(["Data Overview", "Visuals", "Data Cleaning", "Preparation",
-                    "ML Models", "Forecasting", "Business Drivers", "AI Chat", "PDF Report", "📊 Power BI Export", "🖥️ Dashboard"])
+                    "ML Models", "Forecasting", "Business Drivers", "Anomaly Detection",
+                    "AI Chat", "PDF Report", "📊 Power BI Export", "🖥️ Dashboard"])
 
     # Data Overview
     with tabs[0]:
@@ -1496,12 +1657,16 @@ def render_manual_dashboard(df, api_key, agent, client_name, project):
             audit.append(f"Driver analysis on '{kpi}'")
             st.success("Done! Ask AI Chat to explain what this means for the business.")
 
-    # AI Chat
+    # Anomaly Detection
     with tabs[7]:
+        render_anomaly_tab(df, results, audit, "manual")
+
+    # AI Chat
+    with tabs[8]:
         render_chat(df, results, api_key)
 
     # PDF Report
-    with tabs[8]:
+    with tabs[9]:
         st.subheader("Generate PDF Report")
         st.write("Compiles all manual analysis, charts, ML results, forecasts, and AI chat into a PDF.")
         if st.button("Generate PDF", type="primary"):
@@ -1525,11 +1690,11 @@ def render_manual_dashboard(df, api_key, agent, client_name, project):
             st.markdown(f"✓ {line}")
 
     # Power BI Export
-    with tabs[9]:
+    with tabs[10]:
         _render_powerbi_tab(df, results, client_name, project)
 
     # Dashboard
-    with tabs[10]:
+    with tabs[11]:
         render_dashboard(df, results)
 
 
