@@ -93,6 +93,20 @@ nav {
 }
 .nav-cta:hover{box-shadow:0 0 20px rgba(0,212,170,0.4)!important;transform:translateY(-1px)!important}
 
+/* ── LAUNCH OFFER BANNER ── */
+.launch-banner {
+  position:sticky;top:60px;z-index:99;
+  background:linear-gradient(90deg,rgba(0,212,170,0.14),rgba(99,102,241,0.1));
+  border-bottom:1px solid var(--teal-border);
+  text-align:center;
+  padding:9px 5%;
+  font-size:0.82rem;
+  font-weight:600;
+  color:#eafff9;
+}
+.launch-banner strong{color:var(--teal);font-family:'JetBrains Mono',monospace}
+.launch-banner .lb-sep{color:#3d5060;margin:0 8px}
+
 /* ── HERO ── */
 .hero {
   position:relative;z-index:1;
@@ -269,8 +283,10 @@ nav {
   letter-spacing:0.06em;font-family:'JetBrains Mono',monospace;
 }
 .pricing-tier{font-size:0.7rem;font-weight:600;letter-spacing:0.12em;text-transform:uppercase;color:var(--muted);margin-bottom:8px;font-family:'JetBrains Mono',monospace}
-.pricing-price{font-size:2.7rem;font-weight:800;font-family:'JetBrains Mono',monospace;color:#f0f8ff;line-height:1;margin-bottom:6px;letter-spacing:-0.04em}
+.pricing-price{font-size:2.7rem;font-weight:800;font-family:'JetBrains Mono',monospace;color:#f0f8ff;line-height:1;margin-bottom:6px;letter-spacing:-0.04em;display:flex;align-items:baseline;gap:10px}
 .pricing-price sup{font-size:1.2rem;font-weight:500;vertical-align:top;margin-top:6px;display:inline-block}
+.pricing-price .was{font-size:1.15rem;font-weight:600;color:#3d5060;text-decoration:line-through;font-family:'JetBrains Mono',monospace}
+.pricing-offer-tag{display:inline-block;background:rgba(0,212,170,0.1);border:1px solid var(--teal-border);color:var(--teal);font-size:0.68rem;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;padding:3px 10px;border-radius:20px;margin-bottom:10px;font-family:'JetBrains Mono',monospace}
 .pricing-desc{font-size:0.82rem;color:var(--muted);margin-bottom:20px;padding-bottom:18px;border-bottom:1px solid var(--border)}
 .pricing-features{list-style:none;margin-bottom:26px}
 .pricing-features li{font-size:0.85rem;color:#8aa0b4;padding:5px 0;display:flex;gap:10px;align-items:flex-start}
@@ -353,6 +369,11 @@ footer a:hover{opacity:0.7}
   </div>
 </nav>
 
+<!-- LAUNCH OFFER BANNER -->
+<div class="launch-banner">
+  🔥 Launch Offer: <strong>40% OFF</strong> for the first 50 buyers <span class="lb-sep">·</span> Starter now <strong>$19</strong> <span class="lb-sep">·</span> ends once 50 spots are claimed
+</div>
+
 <!-- HERO -->
 <section class="hero">
   <div class="hero-badge"><div class="hero-badge-dot"></div>Automated Data Scientist · v15.0</div>
@@ -363,7 +384,7 @@ footer a:hover{opacity:0.7}
       Try Live Demo — Free →
     </a>
     <a href="https://varunanalyze.gumroad.com/l/dgluuk" target="_blank" class="btn-secondary" onclick="gtag('event','click',{'event_category':'CTA','event_label':'Hero - Buy Now'})">
-      Get the Code — from $49
+      Get the Code — from $19
     </a>
   </div>
   <div class="stats-row">
@@ -371,7 +392,7 @@ footer a:hover{opacity:0.7}
     <div class="stat"><div class="stat-num">6</div><div class="stat-label">ML models</div></div>
     <div class="stat"><div class="stat-num">30d</div><div class="stat-label">AI forecast</div></div>
     <div class="stat"><div class="stat-num">5</div><div class="stat-label">Dashboard tabs</div></div>
-    <div class="stat"><div class="stat-num">$49</div><div class="stat-label">Starting price</div></div>
+    <div class="stat"><div class="stat-num">$19</div><div class="stat-label">Starting price</div></div>
   </div>
 </section>
 
@@ -451,6 +472,12 @@ footer a:hover{opacity:0.7}
       <h3>Two Modes</h3>
       <p>One-Click Mode runs the entire pipeline automatically in 30 seconds. Manual Mode gives you full control — choose your model, features, forecast horizon.</p>
       <span class="feature-tag" style="background:rgba(0,212,170,0.08);color:#00d4aa;border:1px solid rgba(0,212,170,0.15)">Streamlit</span>
+    </div>
+    <div class="feature-card reveal">
+      <div class="feature-icon" style="background:rgba(239,68,68,0.1);">🚨</div>
+      <h3>Anomaly Detection</h3>
+      <p>Automatically flags outliers and irregular patterns in your data using statistical and ML-based detection. Every anomaly is plotted and ranked so you catch fraud, errors, or spikes before they cost you.</p>
+      <span class="feature-tag" style="background:rgba(239,68,68,0.08);color:#ef4444;border:1px solid rgba(239,68,68,0.15)">Isolation Forest</span>
     </div>
   </div>
 </section>
@@ -544,11 +571,13 @@ footer a:hover{opacity:0.7}
   <div class="pricing-grid">
     <div class="pricing-card reveal">
       <div class="pricing-tier">Starter</div>
-      <div class="pricing-price"><sup>$</sup>49</div>
+      <div class="pricing-offer-tag">40% off · first 50 buyers</div>
+      <div class="pricing-price"><span class="was">$32</span><sup>$</sup>19</div>
       <div class="pricing-desc">Core AI data scientist tool</div>
       <ul class="pricing-features">
         <li>AutoML — 6 models compared</li>
         <li>30-day Prophet forecasting</li>
+        <li>Anomaly detection (Isolation Forest)</li>
         <li>Business driver analysis (XAI)</li>
         <li>Claude AI Chat with memory</li>
         <li>Auto PDF report</li>
@@ -560,7 +589,8 @@ footer a:hover{opacity:0.7}
     <div class="pricing-card featured reveal">
       <div class="pricing-badge">MOST POPULAR</div>
       <div class="pricing-tier">Professional</div>
-      <div class="pricing-price"><sup>$</sup>149</div>
+      <div class="pricing-offer-tag">40% off · first 50 buyers</div>
+      <div class="pricing-price"><span class="was">$115</span><sup>$</sup>69</div>
       <div class="pricing-desc">Everything + Dashboard + Power BI</div>
       <ul class="pricing-features">
         <li>Everything in Starter</li>
@@ -575,7 +605,8 @@ footer a:hover{opacity:0.7}
     </div>
     <div class="pricing-card reveal">
       <div class="pricing-tier">Done-For-You</div>
-      <div class="pricing-price"><sup>$</sup>299</div>
+      <div class="pricing-offer-tag">40% off · first 50 buyers</div>
+      <div class="pricing-price"><span class="was">$199</span><sup>$</sup>119</div>
       <div class="pricing-desc">I deploy it for you</div>
       <ul class="pricing-features">
         <li>Everything in Professional</li>
@@ -617,8 +648,10 @@ footer a:hover{opacity:0.7}
   <p>Data analysts, freelancers, business owners, consultants, and small teams who need professional data science outputs without hiring a full-time data scientist or paying expensive consulting fees.</p>
   <h2>How does the AutoML engine work?</h2>
   <p>ProData AI simultaneously trains six ML models — Random Forest, Gradient Boosting, Ridge, Lasso, Decision Tree, and KNN. All are evaluated and ranked on a leaderboard by R² score for regression tasks or accuracy for classification tasks.</p>
+  <h2>Does ProData AI detect anomalies?</h2>
+  <p>Yes. ProData AI automatically flags outliers and irregular data points using statistical and ML-based anomaly detection, ranking each one so unusual spikes, errors, or fraud patterns are easy to spot.</p>
   <h2>How much does ProData AI cost?</h2>
-  <p>One-time purchase starting at $49 for Starter, $149 for Professional (includes dashboard + Power BI export), and $299 for Done-For-You. No monthly fees — you own the code permanently.</p>
+  <p>One-time purchase — launch pricing of $19 for Starter, $69 for Professional (includes dashboard + Power BI export), and $119 for Done-For-You, a 40% discount for the first 50 buyers. No monthly fees — you own the code permanently.</p>
 </section>
 
 <!-- CTA -->
@@ -628,7 +661,7 @@ footer a:hover{opacity:0.7}
     <p>Click Load Demo in the sidebar and watch the full analysis run on the Superstore Sales dataset in 30 seconds.</p>
     <div class="hero-actions" style="margin-bottom:0">
       <a href="https://varu4-prodata-ai-app-d2bocc.streamlit.app/" target="_blank" class="btn-primary" onclick="gtag('event','click',{'event_category':'CTA','event_label':'Bottom - Open Demo'})">Open Live Demo →</a>
-      <a href="https://varunanalyze.gumroad.com/l/dgluuk" target="_blank" class="btn-secondary" onclick="gtag('event','click',{'event_category':'CTA','event_label':'Bottom - Buy'})">Buy from $49</a>
+      <a href="https://varunanalyze.gumroad.com/l/dgluuk" target="_blank" class="btn-secondary" onclick="gtag('event','click',{'event_category':'CTA','event_label':'Bottom - Buy'})">Buy from $19</a>
     </div>
   </div>
 </section>
@@ -850,6 +883,3 @@ document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
 
 </body>
 </html>
-
-
-
